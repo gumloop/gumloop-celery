@@ -59,6 +59,10 @@ class Tasks(bootsteps.StartStopStep):
                 limit = getattr(c.controller, "max_concurrency", None)
                 if limit is None:
                     limit = c.pool.num_processes
+                # Don't fetch into a recycling slot: count only ready workers.
+                ready = getattr(getattr(c.pool, "_pool", None), "_fileno_to_inq", None)
+                if ready is not None:
+                    limit = min(limit, len(ready))
                 if len(state.reserved_requests) >= limit:
                     return False
                 return original_can_consume()

@@ -706,6 +706,43 @@ class test_Tasks:
         assert record.levelname == "INFO"
         assert record.msg == "Global QoS is disabled. Prefetch count in now static."
 
+    def _start_disable_prefetch(self, c):
+        c.app.conf.worker_disable_prefetch = True
+        c.app.conf.worker_detect_quorum_queues = False
+        Tasks(c).start(c)
+        return c.task_consumer.channel.qos.can_consume
+
+    def test_disable_prefetch_does_not_fetch_into_recycling_slot(self):
+        # Concurrency is 3 but a child is recycling, so only 2 workers have
+        # completed the WORKER_UP handshake. With 2 tasks already reserved we
+        # must not fetch a third into the cold-starting slot.
+        c = self.c
+        c.controller.max_concurrency = 3
+        c.pool._pool._fileno_to_inq = {10: 'w1', 11: 'w2'}
+        can_consume = self._start_disable_prefetch(c)
+        with patch('celery.worker.state.reserved_requests', [0, 1]):
+            assert can_consume() is False
+
+    def test_disable_prefetch_fetches_when_all_workers_ready(self):
+        c = self.c
+        c.controller.max_concurrency = 3
+        c.pool._pool._fileno_to_inq = {10: 'w1', 11: 'w2', 12: 'w3'}
+        c.app.amqp.TaskConsumer.return_value.channel.qos.can_consume.return_value = True
+        can_consume = self._start_disable_prefetch(c)
+        with patch('celery.worker.state.reserved_requests', [0, 1]):
+            assert can_consume() is True
+
+    def test_disable_prefetch_falls_back_without_prefork_pool(self):
+        # Pools without _fileno_to_inq (solo/eventlet/gevent) keep the prior
+        # behaviour: gate on the configured concurrency.
+        c = self.c
+        c.controller.max_concurrency = None
+        c.pool.num_processes = 3
+        c.pool._pool = object()
+        can_consume = self._start_disable_prefetch(c)
+        with patch('celery.worker.state.reserved_requests', [0, 1, 2]):
+            assert can_consume() is False
+
 
 class test_Agent:
 

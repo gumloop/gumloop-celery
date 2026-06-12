@@ -17,7 +17,7 @@ from . import local
 
 SERIES = 'immunity'
 
-__version__ = '5.5.3+gumloop_0.1.4'
+__version__ = '5.5.3+gumloop_0.1.5'
 __author__ = 'Rahul Behal'
 __contact__ = 'rahul@gumloop.com'
 __homepage__ = 'https://github.com/gumloop/gumloop-celery'
