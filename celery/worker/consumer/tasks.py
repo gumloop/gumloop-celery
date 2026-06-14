@@ -26,6 +26,26 @@ class Tasks(bootsteps.StartStopStep):
         c.task_consumer = c.qos = None
         super().__init__(c, **kwargs)
 
+    @staticmethod
+    def ready_worker_limit(consumer):
+        """Configured concurrency, capped by the number of workers ready to run.
+
+        Excludes children that are recycling/cold-starting (not yet in the
+        pool's ``_fileno_to_inq``) so we don't fetch a task into a slot that
+        can't run it. Guarded: any error, or a pool without that attribute,
+        falls back to the configured concurrency, keeping this purely additive.
+        """
+        limit = getattr(consumer.controller, "max_concurrency", None)
+        if limit is None:
+            limit = consumer.pool.num_processes
+        try:
+            ready = getattr(getattr(consumer.pool, "_pool", None), "_fileno_to_inq", None)
+            if ready is not None:
+                limit = min(limit, len(ready))
+        except Exception:
+            pass
+        return limit
+
     def start(self, c):
         """Start task consumer."""
         c.update_strategies()
@@ -56,14 +76,7 @@ class Tasks(bootsteps.StartStopStep):
             original_can_consume = channel_qos.can_consume
 
             def can_consume(self):
-                limit = getattr(c.controller, "max_concurrency", None)
-                if limit is None:
-                    limit = c.pool.num_processes
-                # Don't fetch into a recycling slot: count only ready workers.
-                ready = getattr(getattr(c.pool, "_pool", None), "_fileno_to_inq", None)
-                if ready is not None:
-                    limit = min(limit, len(ready))
-                if len(state.reserved_requests) >= limit:
+                if len(state.reserved_requests) >= Tasks.ready_worker_limit(c):
                     return False
                 return original_can_consume()
 
