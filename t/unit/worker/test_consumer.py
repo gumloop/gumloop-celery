@@ -706,6 +706,52 @@ class test_Tasks:
         assert record.levelname == "INFO"
         assert record.msg == "Global QoS is disabled. Prefetch count in now static."
 
+    def test_ready_worker_limit_caps_at_ready_workers(self):
+        # Concurrency 3 but only 2 workers have completed the WORKER_UP
+        # handshake (one recycling), so the limit is capped at 2.
+        c = self.c
+        c.controller.max_concurrency = 3
+        c.pool._pool._fileno_to_inq = {10: 'w1', 11: 'w2'}
+        assert Tasks.ready_worker_limit(c) == 2
+
+    def test_ready_worker_limit_full_when_all_ready(self):
+        c = self.c
+        c.controller.max_concurrency = 3
+        c.pool._pool._fileno_to_inq = {10: 'w1', 11: 'w2', 12: 'w3'}
+        assert Tasks.ready_worker_limit(c) == 3
+
+    def test_ready_worker_limit_without_prefork_pool(self):
+        # Pools without _fileno_to_inq (solo/eventlet/gevent) keep the prior
+        # behaviour: the configured concurrency.
+        c = self.c
+        c.controller.max_concurrency = None
+        c.pool.num_processes = 3
+        c.pool._pool = object()
+        assert Tasks.ready_worker_limit(c) == 3
+
+    def test_ready_worker_limit_falls_back_on_introspection_error(self):
+        # If reading the ready set raises, fall back to configured concurrency
+        # rather than breaking can_consume (purely additive).
+        c = self.c
+        c.controller.max_concurrency = 3
+        c.pool._pool._fileno_to_inq = object()  # len() raises
+        assert Tasks.ready_worker_limit(c) == 3
+
+    def _start_disable_prefetch(self, c):
+        c.app.conf.worker_disable_prefetch = True
+        c.app.conf.worker_detect_quorum_queues = False
+        Tasks(c).start(c)
+        return c.task_consumer.channel.qos.can_consume
+
+    def test_disable_prefetch_does_not_fetch_into_recycling_slot(self):
+        # can_consume gates on ready_worker_limit: 2 ready, 2 reserved -> refuse.
+        c = self.c
+        c.controller.max_concurrency = 3
+        c.pool._pool._fileno_to_inq = {10: 'w1', 11: 'w2'}
+        can_consume = self._start_disable_prefetch(c)
+        with patch('celery.worker.state.reserved_requests', [0, 1]):
+            assert can_consume() is False
+
 
 class test_Agent:
 
