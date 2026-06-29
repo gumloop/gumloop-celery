@@ -15,6 +15,10 @@ from collections import namedtuple
 # Lazy loading
 from . import local
 
+# Apply redis-py recursion workaround (GMLP-9206) before any kombu/redis-py
+# Connection is instantiated. No-op for redis-py >= 6.0.0b2.
+from . import _redis_py_recursion_workaround  # noqa: F401
+
 SERIES = 'immunity'
 
 __version__ = '5.5.3+gumloop_0.1.5'
