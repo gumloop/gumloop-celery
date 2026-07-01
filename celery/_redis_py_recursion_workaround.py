@@ -96,7 +96,8 @@ def _apply_redis_py_recursion_workaround() -> None:
     def on_connect_check_health(self, check_health: bool = True) -> None:
         """Initialize the connection, authenticate and select a database.
 
-        Verbatim copy of redis-py 5.2.1's ``Connection.on_connect``,
+        Verbatim copy of redis-py 5.2.1's ``AbstractConnection.on_connect``
+        (https://github.com/redis/redis-py/blob/v5.2.1/redis/connection.py#L398-L487),
         modified to thread ``check_health`` through every ``send_command``
         call so the inner reconnect path can suppress ``check_health`` and
         break the recursion.
@@ -192,8 +193,9 @@ def _apply_redis_py_recursion_workaround() -> None:
     def connect_check_health(self, check_health: bool = True) -> None:
         """Connect to the Redis server if not already connected.
 
-        Verbatim copy of redis-py 5.2.1's ``Connection.connect``, modified
-        to call ``on_connect_check_health(check_health=check_health)``
+        Verbatim copy of redis-py 5.2.1's ``AbstractConnection.connect``
+        (https://github.com/redis/redis-py/blob/v5.2.1/redis/connection.py#L352-L387),
+        modified to call ``on_connect_check_health(check_health=check_health)``
         instead of ``on_connect()``.
         """
         if self._sock:
