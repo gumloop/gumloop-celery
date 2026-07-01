@@ -15,6 +15,8 @@ from collections import namedtuple
 # Lazy loading
 from . import local
 
+from . import _redis_py_recursion_workaround  # noqa: F401
+
 SERIES = 'immunity'
 
 __version__ = '5.5.3+gumloop_0.1.5'
