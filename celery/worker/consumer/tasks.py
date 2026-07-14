@@ -66,9 +66,22 @@ class Tasks(bootsteps.StartStopStep):
                 prefetch_count=prefetch_count,
                 apply_global=qos_global,
             )
-        c.qos = QoS(set_prefetch_count, c.initial_prefetch_count)
+        eta_task_limit = c.app.conf.worker_eta_task_limit
+        c.qos = QoS(
+            set_prefetch_count, c.initial_prefetch_count, max_prefetch=eta_task_limit
+        )
 
         if c.app.conf.worker_disable_prefetch:
+            # Only apply disable-prefetch for Redis brokers
+            is_redis_broker = c.connection.transport.driver_type == 'redis'
+            if not is_redis_broker:
+                logger.warning(
+                    f"worker_disable_prefetch is only supported for Redis brokers. "
+                    f"Current broker transport: {c.connection.transport.driver_type}. "
+                    f"Ignoring disable_prefetch setting."
+                )
+                return
+
             from types import MethodType
 
             from celery.worker import state
@@ -76,6 +89,8 @@ class Tasks(bootsteps.StartStopStep):
             original_can_consume = channel_qos.can_consume
 
             def can_consume(self):
+                # Gate on workers that have completed the WORKER_UP handshake so a
+                # recycling/cold-starting slot doesn't pull a task it can't run.
                 if len(state.reserved_requests) >= Tasks.ready_worker_limit(c):
                     return False
                 return original_can_consume()
@@ -113,7 +128,9 @@ class Tasks(bootsteps.StartStopStep):
         qos_global = not c.connection.qos_semantics_matches_spec
 
         if c.app.conf.worker_detect_quorum_queues:
-            using_quorum_queues, qname = detect_quorum_queues(c.app, c.connection.transport.driver_type)
+            using_quorum_queues, _ = detect_quorum_queues(
+                c.app, c.connection.transport.driver_type
+            )
 
             if using_quorum_queues:
                 qos_global = False

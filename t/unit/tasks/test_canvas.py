@@ -4,7 +4,6 @@ from collections.abc import Iterable
 from unittest.mock import ANY, MagicMock, Mock, call, patch, sentinel
 
 import pytest
-import pytest_subtests  # noqa
 
 from celery._state import _task_stack
 from celery.canvas import (Signature, _chain, _maybe_group, _merge_dictionaries, chain, chord, chunks, group,
@@ -592,6 +591,40 @@ class test_chain(CanvasCase):
             c.tasks[-1], chord
         ), "Chord followed by a group should be upgraded to a single chord with chained body."
         assert len(c.tasks) == 6
+
+    def test_chain_of_chords_stays_flat(self):
+        c = chain(
+            chord([signature('h1'), signature('h2')], signature('b1'), app=self.app),
+            chord([signature('h3'), signature('h4')], signature('b2'), app=self.app),
+            chord([signature('h5'), signature('h6')], signature('b3'), app=self.app),
+        )
+        assert isinstance(c, _chain)
+        assert len(c.tasks) == 3
+        for task in c.tasks:
+            assert isinstance(task, chord)
+        assert not isinstance(c.tasks[0].body, _chain)
+        assert not isinstance(c.tasks[1].body, _chain)
+        assert not isinstance(c.tasks[2].body, _chain)
+
+    def test_chain_of_chords_serialized_size_constant(self):
+        chords = [
+            chord([signature(f'h{i}_{j}') for j in range(3)],
+                  signature(f'b{i}'), app=self.app)
+            for i in range(6)
+        ]
+        c = chain(*chords)
+        assert isinstance(c, _chain)
+        sizes = [len(json.dumps(task.__json__())) for task in c.tasks]
+        assert max(sizes) == min(sizes), (
+            f"Chord sizes not constant across chain: {sizes}"
+        )
+
+    def test_chord_or_task_still_nests(self):
+        c = chord([signature('h1')], signature('b1'), app=self.app)
+        t = signature('t1')
+        result = chain(c) | t
+        assert isinstance(result, _chain)
+        assert isinstance(result.tasks[0].body, _chain)
 
     def test_apply_options(self):
 
@@ -1242,6 +1275,12 @@ class test_group(CanvasCase):
             assert task.args[1] == 0
             assert isinstance(result, AsyncResult)
             assert group_id is not None
+
+    def test_task_replace_with_group_preserves_group_order(self):
+        self.app.conf.task_always_eager = True
+        sig = self.replace_with_group.s(1, 2)
+        res = self.helper_test_get_delay(sig.delay())
+        assert res == [3, 2]
 
 
 class test_chord(CanvasCase):

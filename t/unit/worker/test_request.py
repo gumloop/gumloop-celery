@@ -188,13 +188,14 @@ class test_Request(RequestCase):
                     sig,
                     Request=Request,
                     exclude_headers=None,
+                    headers=None,
                     **kwargs):
         msg = self.task_message_from_sig(self.app, sig)
-        headers = None
-        if exclude_headers:
-            headers = msg.headers
-            for header in exclude_headers:
-                headers.pop(header)
+        if headers is None:
+            headers = msg.headers.copy()
+            if exclude_headers:
+                for header in exclude_headers:
+                    headers.pop(header, None)
         return Request(
             msg,
             on_ack=Mock(name='on_ack'),
@@ -443,6 +444,34 @@ class test_Request(RequestCase):
         req._tzlocal = 'foo'
         assert req.tzlocal == 'foo'
 
+    def test_ignore_result_from_request_true(self):
+        req = self.get_request(self.add.s(2, 2).set(ignore_result=True))
+        assert req.ignore_result is True
+
+    def test_ignore_result_from_request_false(self):
+        req = self.get_request(self.add.s(2, 2).set(ignore_result=False))
+        assert req.ignore_result is False
+
+    def test_ignore_result_default_from_task_false(self):
+        req = self.get_request(self.add.s(2, 2))
+        assert req.ignore_result is False
+
+    def test_ignore_result_default_from_task_true(self):
+        self.add.ignore_result = True
+        try:
+            req = self.get_request(self.add.s(2, 2))
+            assert req.ignore_result is True
+        finally:
+            self.add.ignore_result = False
+
+    def test_ignore_result_request_overrides_task_true(self):
+        self.add.ignore_result = True
+        try:
+            req = self.get_request(self.add.s(2, 2).set(ignore_result=False))
+            assert req.ignore_result is False
+        finally:
+            self.add.ignore_result = False
+
     def test_task_wrapper_repr(self):
         assert repr(self.xRequest())
 
@@ -454,6 +483,35 @@ class test_Request(RequestCase):
         self.mytask.store_errors_even_if_ignored = True
         job = self.xRequest()
         assert job.store_errors
+
+    def test_store_errors_default(self):
+        self.mytask.ignore_result = False
+        job = self.xRequest()
+        assert job.store_errors
+
+    def test_store_errors_task_ignore_result(self):
+        self.mytask.ignore_result = True
+        job = self.xRequest()
+        assert not job.store_errors
+
+    def test_store_errors_request_overrides_task_ignore_result(self):
+        self.mytask.ignore_result = True
+        msg = self.task_message_from_sig(self.app, self.mytask.s())
+        headers = msg.headers.copy()
+        headers['ignore_result'] = False
+        job = self.get_request(
+            self.mytask.s(),
+            headers=headers,
+        )
+        assert job.store_errors
+
+    def test_ignore_result_from_request_none(self):
+        self.mytask.ignore_result = True
+        msg = self.task_message_from_sig(self.app, self.mytask.s())
+        headers = msg.headers.copy()
+        headers['ignore_result'] = None
+        job = self.get_request(self.mytask.s(), headers=headers)
+        assert job._ignore_result is True
 
     def test_send_event(self):
         job = self.xRequest()
@@ -574,6 +632,39 @@ class test_Request(RequestCase):
         job.cancel(pool, signal='TERM')
         pool.terminate_job.assert_not_called()
         assert job._terminate_on_ack is None
+
+    def test_cancel__emit_retry_true(self):
+        pool = Mock()
+        signum = signal.SIGTERM
+        job = self.get_request(self.mytask.s(1, f='x'))
+        job._apply_result = Mock(name='_apply_result')
+        job.task.backend.mark_as_retry = Mock(name='mark_as_retry')
+        job.task.on_retry = Mock(name='on_retry')
+        with self.assert_signal_called(
+                task_retry, sender=job.task, request=job._context,
+                einfo=None):
+            job.time_start = monotonic()
+            job.worker_pid = 314
+            job.cancel(pool, signal='TERM', emit_retry=True)
+            pool.terminate_job.assert_called_with(job.worker_pid, signum)
+            job.task.backend.mark_as_retry.assert_called_once()
+            job.task.on_retry.assert_called_once()
+            assert job._already_cancelled is True
+
+    def test_cancel__emit_retry_false(self):
+        pool = Mock()
+        signum = signal.SIGTERM
+        job = self.get_request(self.mytask.s(1, f='x'))
+        job._apply_result = Mock(name='_apply_result')
+        job.task.backend.mark_as_retry = Mock(name='mark_as_retry')
+        job.task.on_retry = Mock(name='on_retry')
+        job.time_start = monotonic()
+        job.worker_pid = 314
+        job.cancel(pool, signal='TERM', emit_retry=False)
+        pool.terminate_job.assert_called_with(job.worker_pid, signum)
+        job.task.backend.mark_as_retry.assert_not_called()
+        job.task.on_retry.assert_not_called()
+        assert job._already_cancelled is True
 
     def test_revoked_expires_expired(self):
         job = self.get_request(self.mytask.s(1, f='x').set(
@@ -870,6 +961,26 @@ class test_Request(RequestCase):
         job.on_failure(exc_info)
         assert not job.eventer.send.called
 
+    def test_on_failure_should_terminate(self):
+        from celery.worker import state
+        original_should_terminate = state.should_terminate
+        state.should_terminate = True
+        job = self.xRequest()
+        job.send_event = Mock(name='send_event')
+        job.task.backend = Mock(name='backend')
+
+        try:
+            try:
+                raise KeyError('foo')
+            except KeyError:
+                exc_info = ExceptionInfo()
+                job.on_failure(exc_info)
+
+            job.send_event.assert_not_called()
+            job.task.backend.mark_as_failure.assert_not_called()
+        finally:
+            state.should_terminate = original_should_terminate
+
     def test_from_message_invalid_kwargs(self):
         m = self.TaskMessage(self.mytask.name, args=(), kwargs='foo')
         req = Request(m, app=self.app)
@@ -936,6 +1047,21 @@ class test_Request(RequestCase):
         job = self.xRequest()
         job.on_timeout(soft=True, timeout=1336)
         assert self.mytask.backend.get_status(job.id) == states.PENDING
+
+    def test_on_timeout_should_terminate(self, patching):
+        from celery.worker import state
+        warn = patching('celery.worker.request.warn')
+        error = patching('celery.worker.request.error')
+
+        original_should_terminate = state.should_terminate
+        try:
+            state.should_terminate = True
+            job = self.xRequest()
+            job.on_timeout(None, None)
+            warn.assert_not_called()
+            error.assert_not_called()
+        finally:
+            state.should_terminate = original_should_terminate
 
     def test_fast_trace_task(self):
         assert self.app.use_fast_trace_task is False
