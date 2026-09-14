@@ -390,14 +390,6 @@ class test_Consumer(ConsumerTestCase):
             c.on_close()
 
     def test_on_close_purges_orphan_reservations_from_requests_dict(self):
-        """Regression: ``on_close()`` must remove ``state.requests[id]``
-        entries for Requests that were reserved but never accepted (e.g.
-        ETA tasks queued in ``reserved_requests`` at the moment of a
-        connection loss). PR #7771 attempted this but iterated
-        ``reserved_requests`` (Request objects) and tested membership in
-        ``requests`` (a ``dict[str, Request]``), so ``Request in requests``
-        was always False and nothing was ever deleted.
-        """
         from celery.worker import state
         from celery.worker.consumer.consumer import Consumer
 
@@ -414,8 +406,6 @@ class test_Consumer(ConsumerTestCase):
 
         state.reset_state()
         try:
-            # Orphan reservation: present in ``requests`` and
-            # ``reserved_requests`` but never moved to ``active_requests``.
             orphan = FakeRequest('orphan-1')
             state.requests[orphan.id] = orphan
             state.reserved_requests.add(orphan)
@@ -729,23 +719,13 @@ class test_Consumer(ConsumerTestCase):
             assert consumer.task_consumer.channel.qos.can_consume() is False
 
     def test_disable_prefetch_after_connection_loss_keeps_gate_closed(self):
-        """Regression: ``can_consume`` must still refuse new messages while a
-        task from before a broker reconnect is still running in the pool.
-
-        With ``worker_disable_prefetch`` enabled and concurrency=1, after a
-        channel/connection interruption ``Consumer.on_close()`` clears
-        ``state.reserved_requests``. The disable-prefetch gate then sees an
-        empty set and lets a new message through, even though the pool is
-        still busy with the in-flight task. The gate must remain closed.
-        """
         from celery.worker import state
         from celery.worker.consumer.consumer import Consumer
         from celery.worker.consumer.tasks import Tasks
 
         self.app.conf.worker_disable_prefetch = True
 
-        # Plain class so it supports weakref (Mock() does not, and WeakSet
-        # would silently reject it).
+        # Mock() isn't weakref-able; state's WeakSets would silently drop it.
         class FakeRequest:
             def __init__(self, id):
                 self.id = id
@@ -777,28 +757,19 @@ class test_Consumer(ConsumerTestCase):
         consumer.app.amqp = Mock()
         consumer.app.amqp.TaskConsumer = Mock(return_value=consumer.task_consumer)
 
-        # Install the disable-prefetch gate on the (mocked) channel.
         Tasks(consumer).start(consumer)
         can_consume = consumer.task_consumer.channel.qos.can_consume
 
         state.reset_state()
         try:
-            # One task running in the pool: by the normal lifecycle
-            # (task_reserved + task_accepted) it lives in BOTH sets.
             in_flight = FakeRequest('task-1')
             state.reserved_requests.add(in_flight)
             state.active_requests.add(in_flight)
 
-            # Pre-condition: gate refuses; concurrency is 1 and slot is taken.
             assert can_consume() is False
 
-            # Simulate a broker channel/connection interruption.
             Consumer.on_close(consumer)
 
-            # Pool still has the task running — active_requests is
-            # intentionally not cleared by on_close(). The gate must still
-            # refuse so we don't over-fetch a second message into a
-            # concurrency=1 pool.
             assert in_flight in state.active_requests
             assert can_consume() is False, (
                 "After a connection loss, can_consume() returned True while "
