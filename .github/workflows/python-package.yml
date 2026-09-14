@@ -34,7 +34,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ['3.9', '3.10', '3.11', '3.12', '3.13', '3.14', 'pypy3.11']
-        os: ["blacksmith-4vcpu-ubuntu-2404", "windows-latest"]
+        os: ["ubuntu-24.04", "windows-latest"]
         exclude:
             - python-version: '3.9'
               os: "windows-latest"
@@ -53,12 +53,12 @@ jobs:
 
     steps:
     - name: Install apt packages
-      if: startsWith(matrix.os, 'blacksmith-4vcpu-ubuntu')
+      if: startsWith(matrix.os, 'ubuntu')
       run: |
         sudo apt-get update && sudo apt-get install -f libcurl4-openssl-dev libssl-dev libgnutls28-dev httping expect libmemcached-dev
     - uses: actions/checkout@v6
     - name: Set up Python ${{ matrix.python-version }}
-      uses: useblacksmith/setup-python@v6
+      uses: actions/setup-python@v6
       with:
         python-version: ${{ matrix.python-version }}
         allow-prereleases: true
@@ -77,7 +77,7 @@ jobs:
     - uses: codecov/codecov-action@v5
       with:
         flags: unittests # optional
-        fail_ci_if_error: true # optional (default = false)
+        fail_ci_if_error: false # fork has no CODECOV_TOKEN
         token: ${{ secrets.CODECOV_TOKEN }}
         verbose: true # optional (default = false)
 
@@ -87,9 +87,11 @@ jobs:
       with:
         token: ${{ secrets.CODECOV_TOKEN }}
 
+  # Integration/smoke fan out to ~370 jobs and need pytest-celery's PyPI celery
+  # image, so on the fork they only run on manual dispatch.
   Integration-tests:
     needs: [Unit]
-    if: needs.Unit.result == 'success'
+    if: needs.Unit.result == 'success' && github.event_name == 'workflow_dispatch'
     strategy:
       matrix:
         module: [
@@ -113,7 +115,7 @@ jobs:
 
   Smoke-tests:
     needs: [Unit]
-    if: needs.Unit.result == 'success'
+    if: needs.Unit.result == 'success' && github.event_name == 'workflow_dispatch'
     strategy:
       matrix:
         module: [
