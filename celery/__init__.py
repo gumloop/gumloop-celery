@@ -24,7 +24,7 @@ _original_os_write = os.write
 
 SERIES = 'recovery'
 
-__version__ = '5.6.3+gumloop_0.2.0'
+__version__ = '5.6.3+gumloop_0.2.1'
 __author__ = 'Rahul Behal'
 __contact__ = 'rahul@gumloop.com'
 __homepage__ = 'https://github.com/gumloop/gumloop-celery'

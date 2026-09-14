@@ -11,7 +11,7 @@ on:
         description: 'JSON array of Python versions to test'
         required: false
         type: string
-        default: '["3.9", "3.10", "3.11", "3.12", "3.13", "3.14", "3.14t"]'
+        default: '["3.10", "3.11", "3.12", "3.13", "3.14", "3.14t"]'
       tox_environments:
         description: 'JSON array of tox environments to test'
         required: false
@@ -21,7 +21,7 @@ on:
 jobs:
   testing-with:
     timeout-minutes: 240
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -48,11 +48,11 @@ jobs:
     steps:
       - name: Install apt packages
         run: |
-          sudo apt-get update && sudo apt-get install -f libcurl4-openssl-dev libssl-dev libgnutls28-dev httping expect libmemcached-dev
+          sudo apt-get update && sudo apt-get install -f libcurl4-openssl-dev libev-dev libssl-dev libgnutls28-dev httping expect libmemcached-dev
 
       - uses: actions/checkout@v6
       - name: Set up Python ${{ matrix.python-version }}
-        uses: useblacksmith/setup-python@v6
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
           allow-prereleases: true

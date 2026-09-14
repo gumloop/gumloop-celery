@@ -735,6 +735,139 @@ class test_AsynPool:
         job.discard.assert_called_once()
         assert gen not in pool._active_writers
 
+    @t.skip.if_pypy
+    @patch('billiard.pool.Pool._create_worker_process')
+    def test_flush_preserves_busy_worker_for_accepted_job(self, _create_worker_process):
+        pool = asynpool.AsynPool(processes=2, synack=False, threads=False)
+        pool._state = asynpool.RUN
+        pool.maintain_pool = Mock(name='maintain_pool')
+
+        proc = Mock(name='proc')
+        proc.inqW_fd = 7
+        proc._is_alive.return_value = True
+        job = Mock(name='job')
+        job._accepted = True
+        job._write_to = proc
+        job._scheduled_for = proc
+        job._writer.return_value = None
+
+        pool._cache = {1: job}
+        pool._busy_workers = {7}
+        pool._active_writers.clear()
+        pool.outbound_buffer.clear()
+
+        pool.flush()
+
+        assert 7 in pool._busy_workers
+
+    @t.skip.if_pypy
+    @patch('billiard.pool.Pool._create_worker_process')
+    def test_flush_preserves_busy_worker_via_scheduled_for_fallback(self, _create_worker_process):
+        pool = asynpool.AsynPool(processes=2, synack=False, threads=False)
+        pool._state = asynpool.RUN
+        pool.maintain_pool = Mock(name='maintain_pool')
+
+        proc = Mock(name='proc')
+        proc.inqW_fd = 5
+        proc._is_alive.return_value = True
+        job = Mock(name='job')
+        job._accepted = True
+        job._write_to = None
+        job._scheduled_for = proc
+        job._writer.return_value = None
+
+        pool._cache = {1: job}
+        pool._busy_workers = {5}
+        pool._active_writers.clear()
+        pool.outbound_buffer.clear()
+
+        pool.flush()
+
+        assert 5 in pool._busy_workers
+
+    @t.skip.if_pypy
+    @patch('billiard.pool.Pool._create_worker_process')
+    def test_flush_releases_busy_worker_for_unaccepted_job(self, _create_worker_process):
+        pool = asynpool.AsynPool(processes=2, synack=False, threads=False)
+        pool._state = asynpool.RUN
+        pool.maintain_pool = Mock(name='maintain_pool')
+
+        proc = Mock(name='proc')
+        proc.inqW_fd = 9
+        job = Mock(name='job')
+        job._accepted = False
+        job._write_to = proc
+        job._scheduled_for = proc
+        job._writer.return_value = None
+
+        pool._cache = {1: job}
+        pool._busy_workers = {9}
+        pool._active_writers.clear()
+        pool.outbound_buffer.clear()
+
+        pool.flush()
+
+        assert 9 not in pool._busy_workers
+
+    @t.skip.if_pypy
+    @patch('billiard.pool.Pool._create_worker_process')
+    def test_flush_preserves_accepted_and_releases_unaccepted_together(self, _create_worker_process):
+        pool = asynpool.AsynPool(processes=2, synack=False, threads=False)
+        pool._state = asynpool.RUN
+        pool.maintain_pool = Mock(name='maintain_pool')
+
+        accepted_proc = Mock(name='accepted_proc')
+        accepted_proc.inqW_fd = 7
+        accepted_proc._is_alive.return_value = True
+        accepted_job = Mock(name='accepted_job')
+        accepted_job._accepted = True
+        accepted_job._write_to = accepted_proc
+        accepted_job._scheduled_for = accepted_proc
+        accepted_job._writer.return_value = None
+
+        unaccepted_proc = Mock(name='unaccepted_proc')
+        unaccepted_proc.inqW_fd = 9
+        unaccepted_job = Mock(name='unaccepted_job')
+        unaccepted_job._accepted = False
+        unaccepted_job._write_to = unaccepted_proc
+        unaccepted_job._scheduled_for = unaccepted_proc
+        unaccepted_job._writer.return_value = None
+
+        pool._cache = {1: accepted_job, 2: unaccepted_job}
+        pool._busy_workers = {7, 9}
+        pool._active_writers.clear()
+        pool.outbound_buffer.clear()
+
+        pool.flush()
+
+        assert 7 in pool._busy_workers
+        assert 9 not in pool._busy_workers
+
+    @t.skip.if_pypy
+    @patch('billiard.pool.Pool._create_worker_process')
+    def test_flush_releases_busy_worker_for_dead_process(self, _create_worker_process):
+        pool = asynpool.AsynPool(processes=2, synack=False, threads=False)
+        pool._state = asynpool.RUN
+        pool.maintain_pool = Mock(name='maintain_pool')
+
+        proc = Mock(name='proc')
+        proc.inqW_fd = 3
+        proc._is_alive.return_value = False
+        job = Mock(name='job')
+        job._accepted = True
+        job._write_to = proc
+        job._scheduled_for = proc
+        job._writer.return_value = None
+
+        pool._cache = {1: job}
+        pool._busy_workers = {3}
+        pool._active_writers.clear()
+        pool.outbound_buffer.clear()
+
+        pool.flush()
+
+        assert 3 not in pool._busy_workers
+
     def test_process_result(self):
         x = asynpool.ResultHandler(
             Mock(), Mock(), {}, Mock(),

@@ -1080,7 +1080,17 @@ class AsynPool(_pool.Pool):
             self.outbound_buffer.clear()
             self._active_writers.clear()
             self._active_writes.clear()
-            self._busy_workers.clear()
+
+            # _write_to is only set once the body has been written; a dead
+            # worker's inqW_fd may already have been reused by its replacement.
+            still_busy = set()
+            for job in self._cache.values():
+                if not job._accepted:
+                    continue
+                proc = job._write_to or job._scheduled_for
+                if proc is not None and proc._is_alive():
+                    still_busy.add(proc.inqW_fd)
+            self._busy_workers.intersection_update(still_busy)
 
     def _flush_writer(self, proc, writer):
         fds = {proc.inq._writer}
